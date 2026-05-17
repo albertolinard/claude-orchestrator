@@ -1,0 +1,7 @@
+claude-agent-sdk>=0.2.82
+fastapi>=0.115
+uvicorn[standard]>=0.32
+pydantic>=2.9
+python-telegram-bot>=21
+croniter>=2.0
+webauthn>=2.7

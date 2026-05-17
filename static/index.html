@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Claude Orchestrator</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
+  <link rel="shortcut icon" href="/static/favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <aside id="sidebar">
+    <div class="brand">
+      <span class="dot"></span>
+      <h1>Claude Orchestrator</h1>
+    </div>
+
+    <button id="new-session" class="primary">+ New Session</button>
+
+    <div id="session-list" class="session-list"></div>
+
+    <div class="sidebar-footer">
+      <button id="set-key" class="ghost">Login</button>
+      <button id="passkeys-btn" class="ghost" hidden>Passkeys</button>
+      <button id="users-btn" class="ghost" hidden>Users</button>
+      <button id="refresh" class="ghost">Refresh</button>
+    </div>
+  </aside>
+
+  <main id="main">
+    <header id="chat-header">
+      <div>
+        <h2 id="active-title">No session selected</h2>
+        <div id="active-meta" class="meta"></div>
+      </div>
+      <button id="stop-session" class="danger" hidden>Stop</button>
+    </header>
+
+    <section id="messages" class="messages">
+      <div class="empty">Create or pick a session to start chatting.</div>
+    </section>
+
+    <form id="prompt-form" class="prompt-form">
+      <textarea
+        id="prompt-input"
+        placeholder="Send a prompt… (Enter to send, Shift+Enter for newline)"
+        rows="3"
+        disabled
+      ></textarea>
+      <button id="send-btn" type="submit" disabled>Send</button>
+    </form>
+  </main>
+
+  <dialog id="new-dialog">
+    <form method="dialog">
+      <h3>New Session</h3>
+
+      <label>Working directory <span class="muted">(optional — defaults to /opt/data/users/&lt;user&gt;/workspace)</span>
+        <input name="cwd" placeholder="leave empty to use default" />
+      </label>
+
+      <label>System prompt (optional)
+        <textarea name="system_prompt" rows="2" placeholder="You are a terse assistant…"></textarea>
+      </label>
+
+      <label>Permission mode
+        <select name="permission_mode">
+          <option value="default">default</option>
+          <option value="acceptEdits" selected>acceptEdits</option>
+          <option value="plan">plan</option>
+          <option value="bypassPermissions">bypassPermissions (yolo)</option>
+        </select>
+      </label>
+
+      <label>Allowed tools (comma-separated, empty = all)
+        <input name="allowed_tools" placeholder="Read, Bash, Edit, Write" />
+      </label>
+
+      <label>Model
+        <select name="model">
+          <option value="">CLI default</option>
+          <option value="claude-opus-4-7">claude-opus-4-7 (smartest)</option>
+          <option value="claude-sonnet-4-6">claude-sonnet-4-6 (balanced)</option>
+          <option value="claude-haiku-4-5">claude-haiku-4-5 (fast)</option>
+          <option value="glm-5.1:cloud">glm-5.1:cloud (Ollama)</option>
+          <option value="deepseek-v4-flash:cloud">deepseek-v4-flash:cloud (Ollama)</option>
+        </select>
+      </label>
+
+      <label>Max turns (optional)
+        <input name="max_turns" type="number" min="1" placeholder="unlimited" />
+      </label>
+
+      <div class="dialog-actions">
+        <button value="cancel" class="ghost">Cancel</button>
+        <button value="create" class="primary">Create</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="users-dialog">
+    <form id="user-form">
+      <h3>Users</h3>
+      <div id="users-list" class="users-list"></div>
+
+      <label>Username
+        <input name="username" autocomplete="off" placeholder="lowercase user slug" required />
+      </label>
+      <label>Password
+        <input name="password" type="password" autocomplete="new-password" minlength="12" required />
+      </label>
+      <label class="check-row">
+        <input name="enable_totp" type="checkbox" checked />
+        <span>Generate 2FA secret</span>
+      </label>
+      <label class="check-row">
+        <input name="is_admin" type="checkbox" />
+        <span>Admin</span>
+      </label>
+      <div id="user-result" class="secret-result"></div>
+      <div class="dialog-actions">
+        <button type="button" class="ghost" onclick="document.getElementById('users-dialog').close()">Close</button>
+        <button type="submit" class="primary">Create User</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="passkeys-dialog">
+    <form method="dialog">
+      <h3>Passkeys</h3>
+      <div id="passkeys-list" class="users-list"></div>
+      <div id="passkey-result" class="secret-result"></div>
+      <div class="dialog-actions">
+        <button value="close" class="ghost">Close</button>
+        <button id="passkey-register" type="button" class="primary">Add Passkey</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="key-dialog">
+    <form id="login-form">
+      <h3>Login</h3>
+      <p class="muted">Your browser receives an HttpOnly session cookie after login. The authenticated username determines your isolated workspace at <code>/opt/data/users/&lt;user&gt;/</code>.</p>
+      <label>Username
+        <input name="username" autocomplete="username" required />
+      </label>
+      <label>Password
+        <input name="password" type="password" autocomplete="current-password" required />
+      </label>
+      <label data-totp hidden>2FA code
+        <input name="totp" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]*" />
+      </label>
+      <div id="auth-error" class="form-error"></div>
+      <div class="dialog-actions">
+        <button type="button" class="ghost" onclick="document.getElementById('key-dialog').close()">Cancel</button>
+        <button id="passkey-login" type="button" class="ghost">Use Passkey</button>
+        <button type="submit" class="primary">Login</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

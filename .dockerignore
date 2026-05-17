@@ -1,0 +1,15 @@
+.git
+__pycache__
+*.pyc
+.venv
+.venvs
+orchestrator.db
+*.sqlite*
+node_modules
+.env
+SETUP_TELEGRAM.md
+run.fish
+client_example.sh
+sdk-test.py
+sdk-session.py
+.DS_Store
