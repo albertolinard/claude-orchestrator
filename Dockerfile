@@ -53,7 +53,9 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # app code
-COPY server.py bot.py db.py sessions.py ./
+COPY server.py bot.py db.py sessions.py orchestrator_jobs.py ./
+RUN chmod +x /app/orchestrator_jobs.py \
+    && ln -s /app/orchestrator_jobs.py /usr/local/bin/orchestrator-jobs
 COPY static/ ./static/
 
 # data dir + user for uid 1000 (set via k8s securityContext)
