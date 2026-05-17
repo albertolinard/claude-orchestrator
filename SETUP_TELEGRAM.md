@@ -43,6 +43,20 @@ read README.md and summarize
 /unschedule 3
 ```
 
+Agent sessions also receive an `orchestrator-jobs` helper in their system
+prompt. When a user asks the agent to create, list, or delete a schedule in
+plain language, the agent should perform that action directly with the helper
+instead of replying with a `/schedule` command for the user to copy.
+
+```bash
+orchestrator-jobs create --chat-id "$TELEGRAM_ALLOWED_CHAT_ID" \
+  --cron "0 9 * * *" \
+  --prompt "Check the backup status and report failures"
+
+orchestrator-jobs list --chat-id "$TELEGRAM_ALLOWED_CHAT_ID"
+orchestrator-jobs delete --chat-id "$TELEGRAM_ALLOWED_CHAT_ID" --id 3
+```
+
 ## 4. Enable scheduled jobs via cron
 
 The orchestrator stores jobs in SQLite (`orchestrator.db`). System cron pokes the `/jobs/tick` endpoint every minute, and the server runs anything due.
@@ -61,6 +75,9 @@ Verify:
 ```fish
 crontab -l
 ```
+
+In Kubernetes, prefer a CronJob that calls the same endpoint every minute with
+`X-API-Key` sourced from a Secret.
 
 ## 5. Cron syntax reference
 

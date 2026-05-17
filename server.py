@@ -51,7 +51,7 @@ API_KEY = os.environ.get("ORCHESTRATOR_API_KEY", "")
 if not API_KEY:
     raise RuntimeError("Set ORCHESTRATOR_API_KEY before launch.")
 
-WEB_AUTH_USERNAME = os.environ.get("WEB_AUTH_USERNAME", os.environ.get("TELEGRAM_USER", "linard")).strip()
+WEB_AUTH_USERNAME = os.environ.get("WEB_AUTH_USERNAME", os.environ.get("TELEGRAM_USER", "admin")).strip()
 WEB_AUTH_PASSWORD = os.environ.get("WEB_AUTH_PASSWORD", "")
 WEB_AUTH_PASSWORD_HASH = os.environ.get("WEB_AUTH_PASSWORD_HASH", "")
 WEB_AUTH_TOTP_SECRET = os.environ.get("WEB_AUTH_TOTP_SECRET", "").replace(" ", "")

@@ -7,9 +7,11 @@ Kubernetes with per-user isolated workspaces.
 
 ```bash
 cd claude-orchestrator
-export ORCHESTRATOR_API_KEY="$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')"
-export WEB_AUTH_USERNAME=admin
-export WEB_AUTH_PASSWORD='<at least 12 chars>'
+cp .env.example .env
+# Edit .env and replace every placeholder secret.
+set -a
+. ./.env
+set +a
 python -m uvicorn server:app --host 0.0.0.0 --port 8765
 ```
 
@@ -37,6 +39,22 @@ accounts. Each authenticated username gets its own isolated workspace under
 After login, open **Passkeys** to enroll a passkey for the current user.
 For production passkeys behind a real domain, set `WEB_AUTH_ORIGIN` and
 `WEB_AUTH_RP_ID` to match the public HTTPS origin and relying-party ID.
+
+## Telegram and Scheduled Jobs
+
+Telegram support is optional. Set `TELEGRAM_BOT_TOKEN` and
+`TELEGRAM_ALLOWED_CHAT_ID` to enable it. Users can manage schedules with
+`/schedule`, `/jobs`, and `/unschedule`, and agent sessions can create schedules
+directly through the bundled `orchestrator-jobs` CLI instead of asking the human
+to type a command.
+
+Run the tick endpoint once per minute from cron, Kubernetes CronJob, or another
+scheduler:
+
+```bash
+curl -fsS -X POST -H "X-API-Key: $ORCHESTRATOR_API_KEY" \
+  http://localhost:8765/jobs/tick
+```
 
 ## Claude Requirements
 
