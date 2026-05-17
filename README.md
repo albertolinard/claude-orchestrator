@@ -15,6 +15,29 @@ python -m uvicorn server:app --host 0.0.0.0 --port 8765
 
 Open `http://localhost:8765/`, log in.
 
+## First Admin User
+
+On startup, if the web-user database is empty, the server bootstraps the first
+admin user from environment variables:
+
+```bash
+export WEB_AUTH_USERNAME=admin
+export WEB_AUTH_PASSWORD='<at least 12 chars>'
+```
+
+Use `WEB_AUTH_PASSWORD_HASH` instead of `WEB_AUTH_PASSWORD` if you want to pass
+a precomputed password hash. Set `WEB_AUTH_TOTP_SECRET` to require 2FA for the
+bootstrap admin from the first login.
+
+After logging in as the admin user, open **Users** in the web UI to create more
+users, reset passwords, enable or reset 2FA, grant admin access, or disable
+accounts. Each authenticated username gets its own isolated workspace under
+`/opt/data/users/<user>/`.
+
+After login, open **Passkeys** to enroll a passkey for the current user.
+For production passkeys behind a real domain, set `WEB_AUTH_ORIGIN` and
+`WEB_AUTH_RP_ID` to match the public HTTPS origin and relying-party ID.
+
 ## Claude Requirements
 
 - `claude` (Claude Code CLI) on `PATH`. The Dockerfile installs it via npm.
