@@ -14,12 +14,14 @@ import asyncio
 import base64
 import hashlib
 import hmac
+import ipaddress
 import json
 import os
 import re
 import secrets
 import struct
 import time
+from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import AsyncIterator
@@ -69,6 +71,74 @@ if not WEB_AUTH_USERNAME:
     raise RuntimeError("Set WEB_AUTH_USERNAME before launch.")
 
 ENABLE_BOT = os.environ.get("TELEGRAM_BOT_TOKEN", "") != ""
+
+LOGIN_RATE_LIMIT = int(os.environ.get("LOGIN_RATE_LIMIT", "5"))
+LOGIN_RATE_WINDOW = int(os.environ.get("LOGIN_RATE_WINDOW", "60"))
+_LOGIN_ATTEMPTS: dict[str, deque] = defaultdict(deque)
+
+# Internal-only callers for /jobs/tick. Defaults to Kubernetes pod + service
+# CIDRs plus loopback. Override with INTERNAL_CIDRS env (comma-separated).
+_DEFAULT_INTERNAL_CIDRS = "10.42.0.0/16,10.43.0.0/16,127.0.0.0/8,::1/128"
+INTERNAL_CIDRS = [
+    ipaddress.ip_network(c.strip())
+    for c in os.environ.get("INTERNAL_CIDRS", _DEFAULT_INTERNAL_CIDRS).split(",")
+    if c.strip()
+]
+
+
+def _client_ip(request: Request) -> str:
+    # Trust the immediate peer. We do NOT honor X-Forwarded-For for the
+    # internal-only check, because clients could spoof it; only Traefik can
+    # spoof the TCP peer, which is itself an internal CIDR.
+    return (request.client.host if request.client else "") or ""
+
+
+def _is_internal_ip(ip: str) -> bool:
+    if not ip:
+        return False
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return any(addr in net for net in INTERNAL_CIDRS)
+
+
+def _real_client_ip(request: Request) -> str:
+    """Return the trusted source IP for `require_internal`.
+
+    The TCP peer of any request through Traefik is the Traefik pod, which sits
+    inside the cluster pod CIDR — so peer alone would mark every external HTTP
+    request as internal. We treat the peer as a trusted proxy only when it
+    itself is internal, then take the leftmost X-Forwarded-For entry as the
+    real client. External callers cannot reach the orchestrator without going
+    through Traefik (no NodePort, no LoadBalancer), so this is sound.
+    """
+    peer = _client_ip(request)
+    xff = request.headers.get("x-forwarded-for", "")
+    if peer and _is_internal_ip(peer) and xff:
+        return xff.split(",")[0].strip() or peer
+    return peer
+
+
+def require_internal(request: Request) -> None:
+    if not _is_internal_ip(_real_client_ip(request)):
+        raise HTTPException(status_code=403, detail="internal-only endpoint")
+
+
+def _rate_limit_login(request: Request) -> None:
+    # XFF is fine for rate-limit keying (worst case: attacker rotates XFF and
+    # still costs them, while honest users behind NAT share a bucket).
+    key = (request.headers.get("x-forwarded-for") or _client_ip(request)).split(",")[0].strip()
+    if not key:
+        return
+    now = time.time()
+    window = _LOGIN_ATTEMPTS[key]
+    cutoff = now - LOGIN_RATE_WINDOW
+    while window and window[0] < cutoff:
+        window.popleft()
+    if len(window) >= LOGIN_RATE_LIMIT:
+        raise HTTPException(status_code=429, detail="too many login attempts")
+    window.append(now)
 
 
 def _check_api_key(
@@ -344,7 +414,7 @@ async def auth_status(session_cookie: str = Cookie(default="", alias=SESSION_COO
     }
 
 
-@app.post("/auth/login")
+@app.post("/auth/login", dependencies=[Depends(_rate_limit_login)])
 async def auth_login(body: LoginBody, response: Response) -> dict:
     username = body.username.strip().lower()
     record = db.get_web_user(username)
@@ -459,7 +529,7 @@ async def auth_passkey_login_options(body: PasskeyLoginOptionsBody, request: Req
     return {"challenge_id": challenge_id, "options": options_to_json_dict(options)}
 
 
-@app.post("/auth/passkeys/login/verify")
+@app.post("/auth/passkeys/login/verify", dependencies=[Depends(_rate_limit_login)])
 async def auth_passkey_login_verify(body: PasskeyCredentialBody, request: Request, response: Response) -> dict:
     challenge = WEBAUTHN_CHALLENGES.pop(body.challenge_id, None)
     if not challenge or challenge.get("type") != "login":
@@ -619,7 +689,7 @@ async def query_session(sid: str, body: QueryBody, user: str = Depends(require_a
     return StreamingResponse(gen(), media_type="application/x-ndjson")
 
 
-@app.post("/jobs/tick", dependencies=[Depends(check_api_key)])
+@app.post("/jobs/tick", dependencies=[Depends(require_internal), Depends(check_api_key)])
 async def jobs_tick() -> dict:
     """Run any jobs whose cron fires in the current minute."""
     now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
