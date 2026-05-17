@@ -12,6 +12,7 @@ import shlex
 from croniter import croniter
 from telegram import BotCommand, Update
 from telegram.constants import ChatAction, ParseMode
+from telegram.error import BadRequest
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -166,7 +167,21 @@ async def reply(update: Update, text: str) -> None:
     if chat is None:
         return
     for chunk in telegram_chunks(text):
-        await chat.send_message(chunk, parse_mode=ParseMode.HTML)
+        await send_telegram_html(chat, chunk)
+
+
+async def send_telegram_html(target, text: str, **kwargs) -> None:
+    try:
+        await target.send_message(text, parse_mode=ParseMode.HTML, **kwargs)
+    except BadRequest as e:
+        if "parse entities" not in str(e).lower():
+            raise
+        await target.send_message(_telegram_plain_fallback(text), **kwargs)
+
+
+def _telegram_plain_fallback(text: str) -> str:
+    plain = re.sub(r"</?(?:b|i|code|pre)>", "", text)
+    return html.unescape(plain)
 
 
 def telegram_chunks(text: str) -> list[str]:
@@ -233,11 +248,16 @@ def _format_telegram_text(text: str) -> str:
 
 def _format_inline(text: str) -> str:
     escaped = html.escape(text)
-    escaped = re.sub(r"`([^`\n]+)`", lambda m: f"<code>{m.group(1)}</code>", escaped)
+    codes: list[str] = []
+
+    def stash_code(match: re.Match) -> str:
+        codes.append(match.group(1))
+        return f"@@CODE{len(codes) - 1}@@"
+
+    escaped = re.sub(r"`([^`\n]+)`", stash_code, escaped)
     escaped = re.sub(r"\*\*([^*\n]+)\*\*", lambda m: f"<b>{m.group(1)}</b>", escaped)
-    escaped = re.sub(r"__([^_\n]+)__", lambda m: f"<b>{m.group(1)}</b>", escaped)
-    escaped = re.sub(r"(?<!\*)\*([^*\n]+)\*(?!\*)", lambda m: f"<i>{m.group(1)}</i>", escaped)
-    escaped = re.sub(r"(?<!_)_([^_\n]+)_(?!_)", lambda m: f"<i>{m.group(1)}</i>", escaped)
+    for i, code in enumerate(codes):
+        escaped = escaped.replace(f"@@CODE{i}@@", f"<code>{code}</code>")
     return escaped
 
 
@@ -497,4 +517,4 @@ async def post_to_chat(chat_id: int, text: str) -> None:
     from telegram import Bot
     bot = Bot(token=BOT_TOKEN)
     for chunk in telegram_chunks(text):
-        await bot.send_message(chat_id=chat_id, text=chunk, parse_mode=ParseMode.HTML)
+        await send_telegram_html(bot, chunk, chat_id=chat_id)
