@@ -261,6 +261,43 @@ def _format_inline(text: str) -> str:
     return escaped
 
 
+def _tool_display(event: dict) -> str:
+    name = str(event.get("name") or "tool")
+    tool_input = event.get("input")
+    command = _extract_tool_command(tool_input)
+    label = "Bash" if name.lower() in {"bash", "shell", "exec", "exec_command", "functions.exec_command"} else name
+    if command:
+        return f"🔧 {label}: `{_preview_command(command)}`"
+    return f"🔧 {label}"
+
+
+def _extract_tool_command(value) -> str:
+    if isinstance(value, dict):
+        for key in ("command", "cmd", "script", "shell_command"):
+            item = value.get(key)
+            if isinstance(item, str) and item.strip():
+                return item.strip()
+        for item in value.values():
+            command = _extract_tool_command(item)
+            if command:
+                return command
+    elif isinstance(value, list):
+        for item in value:
+            command = _extract_tool_command(item)
+            if command:
+                return command
+    elif isinstance(value, str) and value.strip():
+        return value.strip()
+    return ""
+
+
+def _preview_command(command: str, limit: int = 180) -> str:
+    single_line = " ".join(command.split())
+    if len(single_line) <= limit:
+        return single_line
+    return single_line[: limit - 1].rstrip() + "…"
+
+
 async def cmd_start(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
     cid = update.effective_chat.id
     if not authorized(update):
@@ -481,7 +518,7 @@ async def on_text(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
             if event["type"] == "text":
                 await reply(update, event["content"])
             elif event["type"] == "tool":
-                await reply(update, f"🔧 {event['name']}")
+                await reply(update, _tool_display(event))
             elif event["type"] == "done":
                 cost = event.get("cost_usd")
                 if cost is not None:
