@@ -122,6 +122,58 @@ path is wired. Then in Telegram:
 <prompt>
 ```
 
+## HTTP Endpoints
+
+All endpoints accept either an authenticated browser session cookie
+(`orchestrator_session`, set by `/auth/login`) or an `X-API-Key` header /
+`?api_key=` query string. Service-to-service callers using `X-API-Key`
+must also send `X-User: <slug>` to scope the request.
+
+### Auth
+
+| Method | Path | Auth | Notes |
+|---|---|---|---|
+| GET    | `/auth/status` | cookie (optional) | returns `{authenticated, user, is_admin, totp_required}` |
+| POST   | `/auth/login` | body `{username, password, totp?}` | sets `orchestrator_session` cookie. **Rate-limited: 5/60s per source IP.** |
+| POST   | `/auth/logout` | none | clears the session cookie |
+| GET    | `/auth/passkeys` | cookie/api-key | list passkeys for the current user |
+| DELETE | `/auth/passkeys/{credential_id}` | cookie/api-key | remove a passkey owned by the current user |
+| POST   | `/auth/passkeys/register/options` | cookie | start WebAuthn registration challenge |
+| POST   | `/auth/passkeys/register/verify` | cookie | finish WebAuthn registration |
+| POST   | `/auth/passkeys/login/options` | body `{username?}` | start WebAuthn login challenge |
+| POST   | `/auth/passkeys/login/verify` | challenge | finish WebAuthn login, sets cookie. **Rate-limited: 5/60s per source IP.** |
+| GET    | `/auth/users` | admin | list web users |
+| POST   | `/auth/users` | admin | create a web user (optional TOTP secret returned once) |
+| PATCH  | `/auth/users/{username}` | admin | update password / admin / disabled / reset TOTP |
+
+### Sessions
+
+| Method | Path | Auth | Notes |
+|---|---|---|---|
+| POST   | `/sessions` | cookie/api-key | body `{cwd?, system_prompt?, permission_mode, allowed_tools[], max_turns?, model?}`. Cwd defaults to `/opt/data/users/<user>/workspace`. |
+| GET    | `/sessions` | cookie/api-key | list active sessions owned by the caller |
+| DELETE | `/sessions/{sid}` | cookie/api-key | stop and delete persisted metadata |
+| POST   | `/sessions/{sid}/query` | cookie/api-key | NDJSON stream of events: `text`, `tool`, `done` |
+
+### Jobs
+
+| Method | Path | Auth | Notes |
+|---|---|---|---|
+| POST   | `/jobs/tick` | api-key | **Internal-only.** Caller source IP must be in `INTERNAL_CIDRS` (default `10.42.0.0/16,10.43.0.0/16,127.0.0.0/8`). Called by the cluster CronJob. Returns `{fired:[job_id...], checked_at}`. |
+
+### Hardening notes
+
+- Web auth uses an `HttpOnly`, `Secure`, `SameSite=Lax` cookie signed with
+  `WEB_SESSION_SECRET` (defaults to `ORCHESTRATOR_API_KEY` if unset). TTL
+  controlled by `WEB_SESSION_TTL_SECONDS` (default 12h).
+- `LOGIN_RATE_LIMIT` and `LOGIN_RATE_WINDOW` env vars tune the brute-force
+  guard. Rate-limit key is the leftmost `X-Forwarded-For` entry, falling
+  back to the TCP peer.
+- `INTERNAL_CIDRS` (comma-separated CIDRs) overrides the default internal
+  allow-list for `/jobs/tick`.
+- `X-API-Key` is effectively a root token: any holder can impersonate any
+  user via `X-User`. Treat it as a service credential, not a user token.
+
 ## Telegram
 
 Single-user trusted channel. Set `TELEGRAM_BOT_TOKEN`,
