@@ -738,7 +738,7 @@ async def _run_job(job: dict) -> None:
             model=job.get("model") or None,
         )
         db.mark_ran(jid)
-        print(f"[job {jid}] run_one_shot ok cost=${result.get('cost_usd', 0):.4f}", flush=True)
+        print(f"[job {jid}] run_one_shot ok cost=${(result.get('cost_usd') or 0):.4f}", flush=True)
         if ENABLE_BOT:
             from bot import post_to_chat
             tools_part = f"\n[tools: {', '.join(result['tools'])}]" if result["tools"] else ""
