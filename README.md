@@ -122,6 +122,28 @@ path is wired. Then in Telegram:
 <prompt>
 ```
 
+## Telegram Scheduling
+
+Telegram supports both recurring jobs and one-time reminders:
+
+```text
+/schedule "0 9 * * *" Check postgres backup status on the k3s cluster
+/remind "2026-05-18 18:00" "America/Fortaleza" Check the backup report
+```
+
+Agents can also create them directly from natural language. Recurring jobs use
+UTC cron expressions. One-time reminders store a UTC `run_at` timestamp and
+disable themselves after dispatch.
+
+Inside the pod, agents can use the helper CLI:
+
+```bash
+orchestrator-jobs create --chat-id 19401922 --user linard --cron "0 9 * * *" --prompt "Check disk usage"
+orchestrator-jobs remind --chat-id 19401922 --user linard --at "2026-05-18 18:00" --timezone "America/Fortaleza" --prompt "Meeting with Moises"
+orchestrator-jobs list --chat-id 19401922
+orchestrator-jobs delete --chat-id 19401922 --id 4
+```
+
 ## HTTP Endpoints
 
 All endpoints accept either an authenticated browser session cookie
