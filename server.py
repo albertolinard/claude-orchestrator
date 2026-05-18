@@ -723,7 +723,10 @@ def _ran_this_minute(value: str | None, now: datetime) -> bool:
 
 
 async def _run_job(job: dict) -> None:
+    import traceback
+    jid = job["id"]
     try:
+        print(f"[job {jid}] starting cron={job['cron_expr']} user={job['user']} model={job.get('model')!r}", flush=True)
         result = await run_one_shot(
             user=job["user"] or str(job["chat_id"]),
             cwd=job["cwd"],
@@ -734,19 +737,27 @@ async def _run_job(job: dict) -> None:
             prompt=job["prompt"],
             model=job.get("model") or None,
         )
-        db.mark_ran(job["id"])
+        db.mark_ran(jid)
+        print(f"[job {jid}] run_one_shot ok cost=${result.get('cost_usd', 0):.4f}", flush=True)
         if ENABLE_BOT:
             from bot import post_to_chat
             tools_part = f"\n[tools: {', '.join(result['tools'])}]" if result["tools"] else ""
             cost_part = f"\n[cost: ${result['cost_usd']:.4f}]" if result["cost_usd"] else ""
-            text = f"⏰ Job #{job['id']} ({job['cron_expr']})\n\n{result['text']}{tools_part}{cost_part}"
-            await post_to_chat(job["chat_id"], text)
+            text = f"⏰ Job #{jid} ({job['cron_expr']})\n\n{result['text']}{tools_part}{cost_part}"
+            try:
+                await post_to_chat(job["chat_id"], text)
+                print(f"[job {jid}] delivered", flush=True)
+            except Exception as e:
+                print(f"[job {jid}] delivery failed: {e!r}", flush=True)
+                traceback.print_exc()
     except Exception as e:
+        print(f"[job {jid}] run failed: {e!r}", flush=True)
+        traceback.print_exc()
         if ENABLE_BOT:
             from bot import post_to_chat
             try:
-                await post_to_chat(job["chat_id"], f"⚠ Job #{job['id']} failed: {e}")
-            except Exception:
-                pass
+                await post_to_chat(job["chat_id"], f"⚠ Job #{jid} failed: {e}")
+            except Exception as e2:
+                print(f"[job {jid}] failure-notification also failed: {e2!r}", flush=True)
     finally:
-        RUNNING_JOBS.discard(job["id"])
+        RUNNING_JOBS.discard(jid)

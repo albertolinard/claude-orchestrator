@@ -172,11 +172,11 @@ async def reply(update: Update, text: str) -> None:
 
 async def send_telegram_html(target, text: str, **kwargs) -> None:
     try:
-        await target.send_message(text, parse_mode=ParseMode.HTML, **kwargs)
+        await target.send_message(text=text, parse_mode=ParseMode.HTML, **kwargs)
     except BadRequest as e:
         if "parse entities" not in str(e).lower():
             raise
-        await target.send_message(_telegram_plain_fallback(text), **kwargs)
+        await target.send_message(text=_telegram_plain_fallback(text), **kwargs)
 
 
 def _telegram_plain_fallback(text: str) -> str:
