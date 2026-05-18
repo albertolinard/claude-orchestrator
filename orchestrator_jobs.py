@@ -4,6 +4,8 @@ import argparse
 import json
 import os
 import sys
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from croniter import croniter
 
@@ -40,6 +42,47 @@ def _create(args: argparse.Namespace) -> int:
     return 0
 
 
+def _parse_run_at(value: str, tz_name: str) -> str:
+    raw = value.strip()
+    normalized = raw.replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(normalized)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            "--at must be ISO-like, for example '2026-05-18 18:00' or '2026-05-18T21:00:00Z'"
+        ) from exc
+    if dt.tzinfo is None:
+        try:
+            tz = ZoneInfo(tz_name)
+        except ZoneInfoNotFoundError as exc:
+            raise argparse.ArgumentTypeError(f"unknown timezone: {tz_name}") from exc
+        dt = dt.replace(tzinfo=tz)
+    return dt.astimezone(timezone.utc).replace(second=0, microsecond=0).isoformat()
+
+
+def _remind(args: argparse.Namespace) -> int:
+    run_at = _parse_run_at(args.at, args.timezone)
+    user = args.user or user_for(args.chat_id)
+    state = db.get_chat_state(args.chat_id)
+    prompt = f"Reminder: {args.prompt}"
+    job_id = db.create_job(
+        cron_expr="",
+        prompt=prompt,
+        chat_id=args.chat_id,
+        user=user,
+        cwd=args.cwd,
+        system_prompt=build_system_prompt(user, args.chat_id),
+        permission_mode=args.permission_mode,
+        allowed_tools=[],
+        max_turns=None,
+        model=args.model if args.model is not None else (state.get("default_model", "") or ""),
+        run_at=run_at,
+        one_shot=True,
+    )
+    print(json.dumps({"created": True, "id": job_id, "run_at": run_at, "prompt": prompt, "one_shot": True}, ensure_ascii=False))
+    return 0
+
+
 def _list(args: argparse.Namespace) -> int:
     jobs = db.list_jobs(chat_id=args.chat_id)
     print(json.dumps({"jobs": jobs}, ensure_ascii=False, default=str))
@@ -53,6 +96,7 @@ def _delete(args: argparse.Namespace) -> int:
 
 
 def main() -> int:
+    db.init_db()
     parser = argparse.ArgumentParser(description="Manage orchestrator scheduled jobs.")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -65,6 +109,17 @@ def main() -> int:
     create.add_argument("--permission-mode", default=os.environ.get("TELEGRAM_PERMISSION_MODE", "bypassPermissions"))
     create.add_argument("--model", default=None)
     create.set_defaults(func=_create)
+
+    remind = sub.add_parser("remind", help="Create a one-time reminder job")
+    remind.add_argument("--chat-id", type=_chat_id, required=True)
+    remind.add_argument("--user", default="")
+    remind.add_argument("--at", required=True, help="Run time, ISO-like. Naive values use --timezone.")
+    remind.add_argument("--timezone", default="UTC")
+    remind.add_argument("--prompt", required=True)
+    remind.add_argument("--cwd", default=None)
+    remind.add_argument("--permission-mode", default=os.environ.get("TELEGRAM_PERMISSION_MODE", "workspace-write"))
+    remind.add_argument("--model", default=None)
+    remind.set_defaults(func=_remind)
 
     list_cmd = sub.add_parser("list", help="List scheduled jobs")
     list_cmd.add_argument("--chat-id", type=_chat_id, required=True)
@@ -81,4 +136,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

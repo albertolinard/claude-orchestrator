@@ -28,6 +28,8 @@ def init_db() -> None:
                 permission_mode TEXT NOT NULL DEFAULT 'acceptEdits',
                 allowed_tools TEXT NOT NULL DEFAULT '[]',
                 max_turns INTEGER,
+                run_at TEXT,
+                one_shot INTEGER NOT NULL DEFAULT 0,
                 enabled INTEGER NOT NULL DEFAULT 1,
                 last_run_at TEXT,
                 created_at TEXT NOT NULL
@@ -68,6 +70,8 @@ def init_db() -> None:
         for stmt in (
             "ALTER TABLE jobs ADD COLUMN user TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE jobs ADD COLUMN model TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE jobs ADD COLUMN run_at TEXT",
+            "ALTER TABLE jobs ADD COLUMN one_shot INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE chat_state ADD COLUMN default_model TEXT NOT NULL DEFAULT ''",
         ):
             try:
@@ -101,13 +105,15 @@ def create_job(
     allowed_tools: list[str],
     max_turns: int | None,
     model: str = "",
+    run_at: str | None = None,
+    one_shot: bool = False,
 ) -> int:
     with conn() as c:
         cur = c.execute(
             """INSERT INTO jobs
             (cron_expr, prompt, chat_id, user, cwd, system_prompt, permission_mode,
-             allowed_tools, max_turns, model, created_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+             allowed_tools, max_turns, model, run_at, one_shot, created_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 cron_expr,
                 prompt,
@@ -119,6 +125,8 @@ def create_job(
                 json.dumps(allowed_tools),
                 max_turns,
                 model,
+                run_at,
+                int(one_shot),
                 _now(),
             ),
         )
@@ -159,10 +167,22 @@ def mark_ran(job_id: int) -> None:
         c.execute("UPDATE jobs SET last_run_at = ? WHERE id = ?", (_now(), job_id))
 
 
+def mark_dispatched(job_id: int, *, disable: bool = False) -> None:
+    with conn() as c:
+        if disable:
+            c.execute(
+                "UPDATE jobs SET last_run_at = ?, enabled = 0 WHERE id = ?",
+                (_now(), job_id),
+            )
+        else:
+            c.execute("UPDATE jobs SET last_run_at = ? WHERE id = ?", (_now(), job_id))
+
+
 def _row_to_job(r: sqlite3.Row) -> dict:
     d = dict(r)
     d["allowed_tools"] = json.loads(d["allowed_tools"] or "[]")
     d["enabled"] = bool(d["enabled"])
+    d["one_shot"] = bool(d.get("one_shot", False))
     return d
 
 

@@ -8,6 +8,8 @@ import html
 import os
 import re
 import shlex
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from croniter import croniter
 from telegram import BotCommand, Update
@@ -29,6 +31,7 @@ BOT_COMMANDS = [
     BotCommand("clear", "Forget active session pointer"),
     BotCommand("model", "Show/set default model for this chat"),
     BotCommand("schedule", "Add scheduled job"),
+    BotCommand("remind", "Add one-time reminder"),
     BotCommand("jobs", "List scheduled jobs"),
     BotCommand("unschedule", "Remove scheduled job"),
     BotCommand("help", "Show help"),
@@ -78,12 +81,17 @@ Also DO NOT merely give the user a /schedule command. Create, list, or delete
 the schedule yourself using the local helper CLI:
 
     orchestrator-jobs create --chat-id {chat_id} --user {user} --cron "<5-field UTC cron>" --prompt "<job prompt>"
+    orchestrator-jobs remind --chat-id {chat_id} --user {user} --at "<local datetime>" --timezone "America/Fortaleza" --prompt "<reminder text>"
     orchestrator-jobs list --chat-id {chat_id}
     orchestrator-jobs delete --chat-id {chat_id} --id <job-id>
 
 Example for daily 07:00 America/Fortaleza (UTC-3, no DST):
 
     orchestrator-jobs create --chat-id {chat_id} --user {user} --cron "0 10 * * *" --prompt "Check pgBackRest status in namespace postgres and report any issues."
+
+Example for a one-time reminder at 18:00 America/Fortaleza:
+
+    orchestrator-jobs remind --chat-id {chat_id} --user {user} --at "2026-05-18 18:00" --timezone "America/Fortaleza" --prompt "Verify the Postgres backup report."
 
 Scheduled jobs:
   - run on this same orchestrator pod, with the same access you have now
@@ -104,7 +112,9 @@ convert the schedule to a 5-field UTC cron expression, run `orchestrator-jobs
 create`, then briefly confirm the job id, cron, and purpose. If they ask why a
 schedule is missing, run `orchestrator-jobs list --chat-id {chat_id}` and create
 the missing job yourself if the intended schedule is clear from context.
-Ask a concise follow-up only when either timing or task details are missing.
+When the user asks to be reminded once, run `orchestrator-jobs remind` yourself
+with a concrete datetime and timezone. Ask a concise follow-up only if the
+reminder text or target time is missing.
 Do not write any external scheduling artifact unless they explicitly ask.
 
 === TELEGRAM OUTPUT STYLE ===
@@ -125,7 +135,7 @@ async def _post_init(app: Application) -> None:
     await set_bot_commands(app)
 
 import db
-from sessions import SESSIONS, create_session, kill_session, stream_query, slugify_user
+from sessions import SESSIONS, create_session, kill_session, stream_query, slugify_user, update_system_prompt
 
 ALLOWED_CHAT_ID = int(os.environ.get("TELEGRAM_ALLOWED_CHAT_ID", "0"))
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
@@ -143,6 +153,7 @@ HELP_TEXT = """Commands:
 /stop <sid>       kill session
 /clear            forget active session pointer
 /schedule "<cron>" <prompt>   schedule recurring job
+/remind "<datetime>" ["timezone"] <prompt>   one-time reminder
 /jobs             list your scheduled jobs
 /unschedule <id>  remove job
 /help             this message
@@ -459,6 +470,72 @@ async def cmd_schedule(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await reply(update, f"Scheduled job #{job_id}\ncron: {cron_expr}\nprompt: {prompt}")
 
 
+def _parse_run_at(value: str, tz_name: str) -> str:
+    try:
+        dt = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(
+            'datetime must look like "2026-05-18 18:00" or "2026-05-18T21:00:00Z"'
+        ) from exc
+    if dt.tzinfo is None:
+        try:
+            tz = ZoneInfo(tz_name)
+        except ZoneInfoNotFoundError as exc:
+            raise ValueError(f"unknown timezone: {tz_name}") from exc
+        dt = dt.replace(tzinfo=tz)
+    return dt.astimezone(timezone.utc).replace(second=0, microsecond=0).isoformat()
+
+
+async def cmd_remind(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    if not authorized(update):
+        return
+    raw = update.message.text.removeprefix("/remind").strip()
+    try:
+        parts = shlex.split(raw)
+    except ValueError as e:
+        await reply(update, f"Parse error: {e}")
+        return
+    if len(parts) < 2:
+        await reply(
+            update,
+            'Usage: /remind "2026-05-18 18:00" "America/Fortaleza" Check backup',
+        )
+        return
+    at_value = parts[0]
+    timezone_name = "America/Fortaleza"
+    prompt_parts = parts[1:]
+    if "/" in parts[1] or parts[1].upper() == "UTC":
+        timezone_name = parts[1]
+        prompt_parts = parts[2:]
+    prompt = " ".join(prompt_parts).strip()
+    if not prompt:
+        await reply(update, "Need reminder text.")
+        return
+    try:
+        run_at = _parse_run_at(at_value, timezone_name)
+    except ValueError as e:
+        await reply(update, str(e))
+        return
+    chat_id = update.effective_chat.id
+    state = db.get_chat_state(chat_id)
+    job_user = user_for(chat_id)
+    job_id = db.create_job(
+        cron_expr="",
+        prompt=f"Reminder: {prompt}",
+        chat_id=chat_id,
+        user=job_user,
+        cwd=None,
+        system_prompt=build_system_prompt(job_user, chat_id),
+        permission_mode=TELEGRAM_PERMISSION_MODE,
+        allowed_tools=[],
+        max_turns=None,
+        model=state.get("default_model", "") or "",
+        run_at=run_at,
+        one_shot=True,
+    )
+    await reply(update, f"Reminder #{job_id}\nrun_at: {run_at}\nprompt: {prompt}")
+
+
 async def cmd_jobs(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not authorized(update):
         return
@@ -469,7 +546,12 @@ async def cmd_jobs(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
     lines = []
     for j in jobs:
         last = j["last_run_at"] or "never"
-        lines.append(f"#{j['id']}  {j['cron_expr']}  last={last}\n  {j['prompt'][:120]}")
+        if j.get("one_shot"):
+            schedule = f"once at {j.get('run_at')}"
+        else:
+            schedule = j["cron_expr"]
+        status = "enabled" if j.get("enabled") else "disabled"
+        lines.append(f"#{j['id']}  {schedule}  {status}  last={last}\n  {j['prompt'][:120]}")
     await reply(update, "\n".join(lines))
 
 
@@ -510,6 +592,8 @@ async def on_text(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not sid or sid not in SESSIONS:
         await reply(update, "No active session. /new to create one.")
         return
+    user = user_for(chat_id)
+    update_system_prompt(sid, build_system_prompt(user, chat_id))
     prompt = update.message.text
     chat = update.effective_chat
     typing_task = asyncio.create_task(_typing_keepalive(chat))
@@ -544,6 +628,7 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("clear", cmd_clear))
     app.add_handler(CommandHandler("model", cmd_model))
     app.add_handler(CommandHandler("schedule", cmd_schedule))
+    app.add_handler(CommandHandler("remind", cmd_remind))
     app.add_handler(CommandHandler("jobs", cmd_jobs))
     app.add_handler(CommandHandler("unschedule", cmd_unschedule))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))

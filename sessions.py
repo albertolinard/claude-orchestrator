@@ -144,6 +144,14 @@ def load_persisted_sessions() -> None:
             )
 
 
+def update_system_prompt(sid: str, system_prompt: str | None) -> None:
+    sess = SESSIONS[sid]
+    if sess.system_prompt == system_prompt:
+        return
+    sess.system_prompt = system_prompt
+    _save_meta(sess)
+
+
 OLLAMA_LOCAL_URL = os.environ.get("OLLAMA_LOCAL_URL", "http://127.0.0.1:11434")
 
 

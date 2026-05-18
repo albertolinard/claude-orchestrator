@@ -29,6 +29,7 @@ Should print `[bot] telegram polling started`.
 | `/stop <sid>` | Kill session |
 | `/clear` | Forget active session (does not kill it) |
 | `/schedule "<cron>" <prompt>` | Schedule recurring job |
+| `/remind "<datetime>" ["timezone"] <prompt>` | Schedule one-time reminder |
 | `/jobs` | List your jobs |
 | `/unschedule <id>` | Remove job |
 | *plain text* | Send as prompt to active session |
@@ -39,19 +40,26 @@ Examples:
 read README.md and summarize
 /schedule "0 9 * * *" Summarize yesterday's git activity in /workspace/myproject
 /schedule "*/15 9-17 * * 1-5" Check /var/log/syslog for errors since last 15min
+/remind "2026-05-18 18:00" "America/Fortaleza" Check the backup report
 /jobs
 /unschedule 3
 ```
 
 Agent sessions also receive an `orchestrator-jobs` helper in their system
-prompt. When a user asks the agent to create, list, or delete a schedule in
-plain language, the agent should perform that action directly with the helper
-instead of replying with a `/schedule` command for the user to copy.
+prompt. When a user asks the agent to create, list, or delete a schedule or
+one-time reminder in plain language, the agent should perform that action
+directly with the helper instead of replying with a command for the user to
+copy.
 
 ```bash
 orchestrator-jobs create --chat-id "$TELEGRAM_ALLOWED_CHAT_ID" \
   --cron "0 9 * * *" \
   --prompt "Check the backup status and report failures"
+
+orchestrator-jobs remind --chat-id "$TELEGRAM_ALLOWED_CHAT_ID" \
+  --at "2026-05-18 18:00" \
+  --timezone "America/Fortaleza" \
+  --prompt "Check the backup report"
 
 orchestrator-jobs list --chat-id "$TELEGRAM_ALLOWED_CHAT_ID"
 orchestrator-jobs delete --chat-id "$TELEGRAM_ALLOWED_CHAT_ID" --id 3
@@ -59,7 +67,7 @@ orchestrator-jobs delete --chat-id "$TELEGRAM_ALLOWED_CHAT_ID" --id 3
 
 ## 4. Enable scheduled jobs via cron
 
-The orchestrator stores jobs in SQLite (`orchestrator.db`). System cron pokes the `/jobs/tick` endpoint every minute, and the server runs anything due.
+The orchestrator stores recurring jobs and one-time reminders in SQLite (`orchestrator.db`). System cron pokes the `/jobs/tick` endpoint every minute, and the server runs anything due. One-time reminders disable themselves as soon as they dispatch.
 
 Edit your crontab:
 ```fish

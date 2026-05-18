@@ -691,7 +691,7 @@ async def query_session(sid: str, body: QueryBody, user: str = Depends(require_a
 
 @app.post("/jobs/tick", dependencies=[Depends(require_internal), Depends(check_api_key)])
 async def jobs_tick() -> dict:
-    """Run any jobs whose cron fires in the current minute."""
+    """Run due recurring jobs and one-time reminders."""
     now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
     fired: list[int] = []
     for job in db.list_jobs():
@@ -700,14 +700,34 @@ async def jobs_tick() -> dict:
         job_id = job["id"]
         if job_id in RUNNING_JOBS:
             continue
-        if _ran_this_minute(job.get("last_run_at"), now):
+        is_one_shot = bool(job.get("one_shot"))
+        if not is_one_shot and _ran_this_minute(job.get("last_run_at"), now):
             continue
-        if croniter.match(job["cron_expr"], now):
+        if _job_due(job, now):
             fired.append(job_id)
             RUNNING_JOBS.add(job_id)
-            db.mark_ran(job_id)
+            db.mark_dispatched(job_id, disable=is_one_shot)
             asyncio.create_task(_run_job(job))
     return {"fired": fired, "checked_at": now.isoformat()}
+
+
+def _job_due(job: dict, now: datetime) -> bool:
+    if job.get("one_shot"):
+        run_at = _parse_utc(job.get("run_at"))
+        return bool(run_at and run_at <= now)
+    return croniter.match(job["cron_expr"], now)
+
+
+def _parse_utc(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).replace(second=0, microsecond=0)
 
 
 def _ran_this_minute(value: str | None, now: datetime) -> bool:
@@ -725,8 +745,9 @@ def _ran_this_minute(value: str | None, now: datetime) -> bool:
 async def _run_job(job: dict) -> None:
     import traceback
     jid = job["id"]
+    label = f"reminder at {job.get('run_at')}" if job.get("one_shot") else f"cron={job['cron_expr']}"
     try:
-        print(f"[job {jid}] starting cron={job['cron_expr']} user={job['user']} model={job.get('model')!r}", flush=True)
+        print(f"[job {jid}] starting {label} user={job['user']} model={job.get('model')!r}", flush=True)
         result = await run_one_shot(
             user=job["user"] or str(job["chat_id"]),
             cwd=job["cwd"],
@@ -743,7 +764,8 @@ async def _run_job(job: dict) -> None:
             from bot import post_to_chat
             tools_part = f"\n[tools: {', '.join(result['tools'])}]" if result["tools"] else ""
             cost_part = f"\n[cost: ${result['cost_usd']:.4f}]" if result["cost_usd"] else ""
-            text = f"⏰ Job #{jid} ({job['cron_expr']})\n\n{result['text']}{tools_part}{cost_part}"
+            title = f"Reminder #{jid}" if job.get("one_shot") else f"⏰ Job #{jid} ({job['cron_expr']})"
+            text = f"{title}\n\n{result['text']}{tools_part}{cost_part}"
             try:
                 await post_to_chat(job["chat_id"], text)
                 print(f"[job {jid}] delivered", flush=True)
